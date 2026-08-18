@@ -19,6 +19,7 @@ src-others/
 /memo.txt
 # Editor directories and files
 .vscode/*
+!.vscode/settings.json
 !.vscode/extensions.json
 .idea
 .DS_Store
@@ -46,7 +47,7 @@ dist.zip
 /scripts/
 .env
 /server/node/ssl/certificate
-
+!.env.local
 
 # Due to Cargo.lock makes the project build fail, we ignore it
 Cargo.lock
