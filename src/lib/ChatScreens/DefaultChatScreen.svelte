@@ -392,7 +392,7 @@
     function updateInputSize() {
         if(inputEle){
             inputEle.style.height = "0";
-            inputHeight = (inputEle.scrollHeight) + "px";
+            inputHeight = (inputEle.scrollHeight + 2) + "px";
             inputEle.style.height = inputHeight
         }
     }
@@ -510,7 +510,7 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="w-full h-full relative" style={customStyle} onclick={() => {
+<div class="w-full h-full relative {DBState.db.fixedChatTextarea ? 'flex flex-col' : ''}" style={customStyle} onclick={() => {
     openMenu = false
 }}>
     
@@ -570,7 +570,7 @@
             {/await}
         {/if}
     {:else}
-        <div class="h-full w-full flex flex-col-reverse overflow-y-auto relative default-chat-screen" onscroll={(e) => {
+        <div class="{DBState.db.fixedChatTextarea ? 'flex-1 min-h-0' : 'h-full'} w-full flex flex-col-reverse overflow-y-auto relative default-chat-screen" onscroll={(e) => {
             //@ts-expect-error scrollHeight/clientHeight/scrollTop don't exist on EventTarget, but target is HTMLElement here
             const scrolled = (e.target.scrollHeight - e.target.clientHeight + e.target.scrollTop)
             if(scrolled < 100 && DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message.length > loadPages){
@@ -586,8 +586,10 @@
         }}>
             <div
                     class="{DBState.db.fixedChatTextarea ? 'sticky pt-2 pb-2 right-0 bottom-0 bg-bgcolor' : 'mt-2 mb-2'} flex items-stretch w-full"
-                    style="{DBState.db.fixedChatTextarea ? 'z-index:29;' : ''}"
+                    style="{DBState.db.fixedChatTextarea ? 'z-index:29; display: none;' : ''}"
             >
+
+                {#if !DBState.db.fixedChatTextarea}
                 {#if DBState.db.useChatSticker && currentCharacter.type !== 'group'}
                     <div onclick={()=>{toggleStickers = !toggleStickers}}
                          class={"ml-4 bg-textcolor2 flex justify-center items-center  w-12 h-12 rounded-md hover:bg-blue-500 transition-colors "+(toggleStickers ? 'text-green-500':'text-textcolor')}>
@@ -698,6 +700,7 @@
                     >
                         <Plus />
                     </div>
+                {/if}
                 {/if}
             </div>
             {#if DBState.db.useAutoTranslateInput && DBState.db.characters[$selectedCharID]?.chaId !== '§playground'}
@@ -910,7 +913,7 @@
             {/if}
 
             {#if openMenu}
-                <div class="{DBState.db.fixedChatTextarea ? 'fixed' : 'absolute'} right-2 bottom-16 p-5 bg-darkbg flex flex-col gap-3 text-textcolor rounded-md" onclick={(e) => {
+                <div class="{DBState.db.fixedChatTextarea ? 'fixed' : 'absolute'} right-2 bottom-16 p-5 bg-darkbg flex flex-col gap-3 text-textcolor rounded-md" style="{DBState.db.fixedChatTextarea ? 'z-index: 29;' : ''}" onclick={(e) => {
                     e.stopPropagation()
                 }}>
                     {#if DBState.db.characters[$selectedCharID].type === 'group'}
@@ -1072,6 +1075,130 @@
 
             {/if}
         </div>
+
+        {#if DBState.db.fixedChatTextarea}
+            <div
+                    class="flex-shrink-0 mt-2 mb-2 flex items-stretch w-full"
+                    style="max-height: 25%;"
+            >
+                {#if DBState.db.useChatSticker && currentCharacter.type !== 'group'}
+                    <div onclick={()=>{toggleStickers = !toggleStickers}}
+                            class={"ml-4 bg-textcolor2 flex justify-center items-center  w-12 h-12 rounded-md hover:bg-blue-500 transition-colors "+(toggleStickers ? 'text-green-500':'text-textcolor')}>
+                        <Laugh/>
+                    </div>
+                {/if}
+
+                <textarea class="peer text-input-area focus:border-textcolor transition-colors outline-hidden text-textcolor p-2 min-w-0 border border-r-0 bg-transparent rounded-md rounded-r-none input-text text-xl grow ml-4 border-darkborderc resize-none overflow-y-hidden overflow-x-hidden max-w-full placeholder:text-sm"
+                            style="min-height: 38px; max-height: 100%; overflow: auto; font-size: 14px;"
+                            bind:value={messageInput}
+                            bind:this={inputEle}
+                            onkeydown={(e) => {
+                        if(e.key.toLocaleLowerCase() === "enter" && !e.isComposing){
+                            if(DBState.db.sendWithEnter && (!e.shiftKey)){
+                                send()
+                                e.preventDefault()
+                            }else if(!DBState.db.sendWithEnter && e.shiftKey){
+                                send()
+                                e.preventDefault()
+                            }
+                        }
+                        if(e.key.toLocaleLowerCase() === "m" && (e.ctrlKey)){
+                            reroll()
+                            e.preventDefault()
+                        }
+                    }}
+                            onpaste={(e) => {
+                        const items = e.clipboardData?.items
+                        if(!items){
+                            return
+                        }
+                        let canceled = false
+
+                        for(const item of items){
+                            if(item.kind === 'file' && item.type.startsWith('image')){
+                                if(!canceled){
+                                    e.preventDefault()
+                                    canceled = true
+                                }
+                                const file = item.getAsFile()
+                                if(file){
+                                    const reader = new FileReader()
+                                    reader.onload = async (e) => {
+                                        const buf = e.target?.result as ArrayBuffer
+                                        const uint8 = new Uint8Array(buf)
+                                        const results = await postChatFile({
+                                            name: file.name,
+                                            data: uint8
+                                        })
+                                        if(!results) return
+                                        for(const res of results){
+                                            if(res?.type === 'asset'){
+                                                fileInput.push(res.data)
+                                            }
+                                            if(res?.type === 'text'){
+                                                messageInput += `{{file::${res.name}::${res.data}}}`
+                                            }
+                                        }
+                                        updateInputSizeAll()
+                                    }
+                                    reader.readAsArrayBuffer(file)
+                                }
+                            }
+                        }
+                    }}
+                            oninput={()=>{updateInputSizeAll();updateInputTransateMessage(false)}}
+                            style:height={inputHeight}
+                ></textarea>
+
+
+                {#if $doingChat || doingChatInputTranslate}
+                    <button
+                            aria-labelledby="cancel"
+                            class="peer-focus:border-textcolor  flex justify-center border-y border-darkborderc items-center text-textcolor p-3 hover:bg-blue-500 hover:text-white transition-colors" onclick={abortChat}
+                            style="max-height: 100%;"
+                            style:height={inputHeight}
+                    >
+                        <div class="loadmove chat-process-stage-{$chatProcessStage}" class:autoload={autoMode}></div>
+                    </button>
+                {:else}
+                    <button
+                            onclick={send}
+                            class="flex justify-center border-y border-darkborderc items-center text-textcolor p-3 peer-focus:border-textcolor hover:bg-blue-500 hover:text-white transition-colors button-icon-send"
+                            style="max-height: 100%;"
+                            style:height={inputHeight}
+                    >
+                        <Send />
+                    </button>
+                {/if}
+                {#if DBState.db.characters[$selectedCharID]?.chaId !== '§playground'}
+                    <button
+                            onclick={(e) => {
+                            openMenu = !openMenu
+                            e.stopPropagation()
+                        }}
+                            class="peer-focus:border-textcolor mr-2 flex border-y border-r border-darkborderc justify-center items-center text-textcolor p-3 rounded-r-md hover:bg-blue-500 hover:text-white transition-colors"
+                            style:height={inputHeight}
+                            style="max-height: 100%;"
+                    >
+                        <MenuIcon />
+                    </button>
+                {:else}
+                    <div onclick={(e) => {
+                        DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message.push({
+                            role: 'char',
+                            data: ''
+                        })
+                        DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage] = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage]
+                    }}
+                            class="peer-focus:border-textcolor mr-2 flex border-y border-r border-darkborderc justify-center items-center text-textcolor p-3 rounded-r-md hover:bg-blue-500 hover:text-white transition-colors"
+                            style:height={inputHeight}
+                            style="max-height: 100%;"
+                    >
+                        <Plus />
+                    </div>
+                {/if}
+            </div>
+        {/if}
 
     {/if}
 </div>
