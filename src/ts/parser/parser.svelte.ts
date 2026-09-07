@@ -384,17 +384,17 @@ async function renderHighlightableMarkdown(data:string) {
                 hljs.registerLanguage(lang, languageModule.default)
             }
             if(lang === 'none'){
-                rendered = rendered.replace(placeholder, `<pre><code>${md.utils.escapeHtml(code)}</code></pre>`)
+                rendered = rendered.replace(placeholder, `<pre style="white-space: pre-wrap; word-break: break-all;"><code>${md.utils.escapeHtml(code)}</code></pre>`)
             }
             else if(lang === 'error'){
-                rendered = rendered.replace(placeholder, `<div class="risu-error"><h1>${language.error}</h1>${md.utils.escapeHtml(code)}</div>`)
+                rendered = rendered.replace(placeholder, `<div class="risu-error" style="white-space: pre-wrap; word-break: break-all;"><h1>${language.error}</h1>${md.utils.escapeHtml(code)}</div>`)
             }
             else{
                 const highlighted = hljs.highlight(code, {
                     language: lang,
                     ignoreIllegals: true
                 }).value
-                rendered = rendered.replace(placeholder, `<pre class="hljs" x-hl-lang="${fileExt}"><code>${highlighted}</code></pre>`)   
+                rendered = rendered.replace(placeholder, `<pre class="hljs" x-hl-lang="${fileExt}" style="white-space: pre-wrap; word-break: break-all;"><code>${highlighted}</code></pre>`)   
             }
         } catch (error) {
             

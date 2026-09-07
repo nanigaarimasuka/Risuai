@@ -2170,7 +2170,7 @@ export function registerCBS(arg:CBSRegisterArg) {
                 return `<pre-hljs-placeholder lang="${args[0]}">`+ code +'</pre-hljs-placeholder>'
             }
 
-            return `<pre><code>${code}</code></pre>`
+            return `<pre style="white-space: pre-wrap; word-break: break-all;"><code>${code}</code></pre>`
         },
         alias: [],
         description: 'Formats text as a code block using HTML pre and code tags.\n\nUsage:: {{codeblock::some code here}}, or {{codeblock::language::some code here}} for syntax highlighting.',
