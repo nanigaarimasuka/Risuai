@@ -19,6 +19,15 @@ export type LLMParameter =
 
 export type ModelModeExtended = 'model' | 'submodel' | 'memory' | 'emotion' | 'otherAx' | 'translate'
 
+// Generation settings a single request sets instead of the user's settings.
+// temperature is the value sent (e.g. 0.7); reasoning_effort uses the
+// settings' scale (-1 off, 0 low, 1 medium, 2 high, 3 extra high).
+export type LLMParameterOverrides = {
+    temperature?: number
+    reasoning_effort?: number
+    thinking_tokens?: number
+}
+
 const reasoningCapabilityParameters: LLMParameter[] = [
     'reasoning_effort_min_medium',
     'reasoning_effort_none',
@@ -44,7 +53,13 @@ export function setObjectValue<T>(obj: T, key: string, value: any): T {
     return obj
 }
 
-export function getAdditionalParameters(aiModel?: string): [string, string][] {
+// extra holds a request's own additional parameters, applied after the model's.
+export function getAdditionalParameters(aiModel?: string, extra?: [string, string][]): [string, string][] {
+    const params = getModelAdditionalParameters(aiModel)
+    return extra?.length ? [...params, ...extra] : params
+}
+
+function getModelAdditionalParameters(aiModel?: string): [string, string][] {
     const db = getDatabase()
 
     if (!aiModel) {
@@ -142,6 +157,7 @@ export function applyParameters(
     arg: {
         ignoreTopKIfZero?: boolean
         modelId:string
+        overrides?: LLMParameterOverrides
     },
 ): Record<string, any> {
     const db = getDatabase()
@@ -176,6 +192,19 @@ export function applyParameters(
         return ['low', 'medium', 'high'][verbosity] ?? 'medium'
     }
 
+    // A request's own value replaces the settings' value for this parameter.
+    function applyOverride(parameter: LLMParameter): boolean {
+        const override = arg.overrides?.[parameter as keyof LLMParameterOverrides]
+        if (override === undefined || override === null || isNaN(override)) {
+            return false
+        }
+        const value = parameter === 'reasoning_effort'
+            ? getEffort(override, reasoningDisabledEffort, supportsXHighReasoning, reasoningMinEffort)
+            : override
+        data = setObjectValue(data, rename[parameter] ?? parameter, value)
+        return true
+    }
+
     if (db.seperateParametersEnabled && (modelMode !== 'model' || db.seperateParametersByModel)) {
         let sepParams = db.seperateParameters[modelMode]
         if (db.seperateParametersByModel){
@@ -192,6 +221,9 @@ export function applyParameters(
         for (const parameter of parameters) {
             let value: number | string = 0
             if (isReasoningCapabilityParameter(parameter)) {
+                continue
+            }
+            if (applyOverride(parameter)) {
                 continue
             }
             if (parameter === 'top_k' && arg.ignoreTopKIfZero && sepParams[parameter] === 0) {
@@ -276,6 +308,9 @@ export function applyParameters(
     for (const parameter of parameters) {
         let value: number | string = 0
         if (isReasoningCapabilityParameter(parameter)) {
+            continue
+        }
+        if (applyOverride(parameter)) {
             continue
         }
         if (parameter === 'top_k' && arg.ignoreTopKIfZero && db.top_k === 0) {

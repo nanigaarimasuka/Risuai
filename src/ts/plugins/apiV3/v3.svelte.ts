@@ -1,5 +1,6 @@
 import { allowedDbKeys, customProviderStore, getV2PluginAPIs, handlePluginInstallViaPlugin, pluginV2, type PluginV2ProviderArgument, type PluginV2ProviderOptions, type RisuPlugin } from "../plugins.svelte";
 import { SandboxHost } from "./factory";
+import { chatChanges, type KnownChat } from "./chatChanges";
 import { getDatabase } from "src/ts/storage/database.svelte";
 import { SafeLocalPluginStorage, tagWhitelist } from "../pluginSafeClass";
 import DOMPurify from 'dompurify';
@@ -20,7 +21,7 @@ import localforage from "localforage";
 import { LLMFlags, LLMFormat, LLMProvider, LLMTokenizer, type LLMModel } from "src/ts/model/types";
 import { sendChat as processSendChat, doingChat } from "src/ts/process/index.svelte";
 import { processScriptFull } from "src/ts/process/scripts";
-import { getModelInfo } from "src/ts/model/modellist";
+import { getModelInfo, getModelList } from "src/ts/model/modellist";
 import type { ModelModeExtended } from "src/ts/process/request/shared";
 import { requestChatDataMain } from "src/ts/process/request/request";
 import { getModuleLorebooks } from "src/ts/process/modules";
@@ -729,13 +730,13 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             oldApis.addRisuReplacer(name, func as any);
         },
         removeRisuReplacer: oldApis.removeRisuReplacer,
-        addRisuChatListener: async (mode:'output', func:Function) => {
+        addRisuChatListener: async (mode:'output', func:Function, options?:{ snapshot?: boolean }) => {
             //permission check, lets use same as replacer
             const conf = await getPluginPermission(plugin.name, 'replacer', 'periodically');
             if(!conf){
                 return;
             }
-            oldApis.addRisuChatListener(mode, func as any);
+            oldApis.addRisuChatListener(mode, func as any, options);
             addPluginUnloadCallback(plugin.name, () => oldApis.removeRisuChatListener(mode, func as any));
         },
         removeRisuChatListener: oldApis.removeRisuChatListener,
@@ -884,6 +885,48 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                 }
             }
             return null;
+        },
+        // What changed in a chat since the plugin's copy of it (known); see
+        // chatChanges.ts.
+        getChatChangesFromIndex: (characterIndex:number, chatIndex:number, known?:KnownChat) => {
+            const db = DBState.db
+            const charIds = Object.keys(db.characters);
+            const character = db.characters[charIds[characterIndex]];
+            const chat = character?.chats?.[chatIndex];
+            if(!chat){
+                return null;
+            }
+            return chatChanges(chat, known, (value) => $state.snapshot(value));
+        },
+        // The ids that tell which chat is open, without copying its messages.
+        getChatIdentityFromIndex: (characterIndex:number, chatIndex:number) => {
+            const db = DBState.db
+            const charIds = Object.keys(db.characters);
+            const character = db.characters[charIds[characterIndex]];
+            const chat = character?.chats?.[chatIndex];
+            if(!chat){
+                return null;
+            }
+            return {
+                chatId: String(chat.id ?? ''),
+                characterId: String(character.chaId ?? ''),
+            };
+        },
+        // Character and chat names with their ids, in character index order,
+        // without any messages.
+        getChatSummaries: () => {
+            const db = DBState.db
+            return Object.keys(db.characters).map((charId) => {
+                const character = db.characters[charId];
+                return {
+                    characterId: String(character?.chaId ?? ''),
+                    name: String(character?.name ?? ''),
+                    chats: (character?.chats ?? []).map((chat) => ({
+                        id: String(chat?.id ?? ''),
+                        name: String(chat?.name ?? ''),
+                    })),
+                };
+            });
         },
         parseRisuChat: async (text:string, options?:{
             messageIndex?: number
@@ -1306,26 +1349,88 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                 }
             }
         },
+        // The models the model selector offers, by id and name only: no
+        // endpoints, keys or other settings.
+        getModelList: async () => {
+            const models: { id: string, name: string, provider: string }[] = []
+            for (const group of getModelList({ groupedByProvider: true })) {
+                for (const model of group.models) {
+                    models.push({
+                        id: model.id,
+                        name: model.fullName ?? model.name,
+                        provider: group.providerName === '@as-is' ? '' : group.providerName,
+                    })
+                }
+            }
+            for (const model of DBState.db.customModels ?? []) {
+                models.push({ id: model.id, name: model.name ?? 'Unnamed', provider: 'Custom' })
+            }
+            return models
+        },
         runLLMModel: async (options: {
             mode: ModelModeExtended
             messages: OpenAIChat[]
             staticModel?: string
             allowPlugins?: boolean
+            // Generation settings for this request instead of the user's.
+            maxTokens?: number
+            temperature?: number
+            reasoningEffort?: number
+            thinkingTokens?: number
+            additionalParameters?: [string, string][]
+            // Aborts the request after this many milliseconds.
+            timeoutMs?: number
         }) => {
-            return requestChatDataMain({
-                formated: options.messages,
-                bias: {},
-                staticModel: options.staticModel,
+            const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined
+            const additionalParameters = Array.isArray(options.additionalParameters)
+                ? options.additionalParameters.filter((entry): entry is [string, string] =>
+                    Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && typeof entry[1] === 'string')
+                : undefined
+            const timeoutMs = number(options.timeoutMs)
+            const abort = timeoutMs !== undefined && timeoutMs > 0 ? new AbortController() : null
+            const timer = abort ? setTimeout(() => abort.abort(), timeoutMs) : null
+            try {
+                const result = await requestChatDataMain({
+                    formated: options.messages,
+                    bias: {},
+                    staticModel: options.staticModel,
+                    maxTokens: number(options.maxTokens),
+                    parameterOverrides: {
+                        temperature: number(options.temperature),
+                        reasoning_effort: number(options.reasoningEffort),
+                        thinking_tokens: number(options.thinkingTokens),
+                    },
+                    additionalParameters,
 
-                // Calls into plugin-provided models are blocked by default to
-                // guard against accidental IPC loops between provider plugins.
-                // Plugin authors who need to reach the user's plugin-supplied
-                // main or auxiliary model (e.g. a TTS preprocessor that
-                // rewrites text with the configured otherAx model) can opt in
-                // explicitly with `allowPlugins: true`, accepting responsibility
-                // for avoiding provider-to-provider call loops.
-                blockPlugins: !options.allowPlugins,
-            }, options.mode)
+                    // Calls into plugin-provided models are blocked by default to
+                    // guard against accidental IPC loops between provider plugins.
+                    // Plugin authors who need to reach the user's plugin-supplied
+                    // main or auxiliary model (e.g. a TTS preprocessor that
+                    // rewrites text with the configured otherAx model) can opt in
+                    // explicitly with `allowPlugins: true`, accepting responsibility
+                    // for avoiding provider-to-provider call loops.
+                    blockPlugins: !options.allowPlugins,
+                }, options.mode, abort?.signal ?? null)
+                // A stream cannot cross into the plugin's frame; return the
+                // finished text instead. Each chunk holds the text so far.
+                if (result.type === 'streaming') {
+                    let text = ''
+                    const reader = result.result.getReader()
+                    while (true) {
+                        const { done, value } = await reader.read()
+                        if (done) {
+                            break
+                        }
+                        text = value?.['0'] ?? text
+                    }
+                    return { type: 'success' as const, result: text, model: result.model }
+                }
+                return result
+            } finally {
+                if (timer) {
+                    clearTimeout(timer)
+                }
+            }
         },
         sendChat: async (message: string) => {
             const conf = await getPluginPermission(plugin.name, 'sendChat');

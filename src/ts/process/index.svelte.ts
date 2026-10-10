@@ -59,13 +59,21 @@ async function runChatOutputListeners(char: any, chat: any, characterIndex: numb
         return
     }
 
-    const charSnapshot = $state.snapshot(char)
-    const chatSnapshot = $state.snapshot(chat)
+    // Copying the character copies all its chats, so copy only for listeners
+    // that want copies.
+    const wantsCopies = [...pluginV2.chatOutput].some((listener) => !pluginV2.chatOutputIdsOnly.has(listener))
+    const charSnapshot = wantsCopies ? $state.snapshot(char) : null
+    const chatSnapshot = wantsCopies ? $state.snapshot(chat) : null
+    const idsOnly = {
+        char: { chaId: char?.chaId },
+        chat: { id: chat?.id },
+    }
     for(const listener of pluginV2.chatOutput){
         try {
+            const wantsIds = pluginV2.chatOutputIdsOnly.has(listener)
             await listener({
-                char: charSnapshot,
-                chat: chatSnapshot,
+                char: wantsIds ? idsOnly.char : charSnapshot,
+                chat: wantsIds ? idsOnly.chat : chatSnapshot,
                 characterIndex,
                 chatIndex,
                 messageIndex,

@@ -339,7 +339,8 @@ export async function requestGoogleCloudVertex(arg:RequestDataArgumentExtended):
             'reasoning_effort': "thinkingConfig.thinkingLevel"
         }, arg.mode, {
             ignoreTopKIfZero: true,
-            modelId: arg.modelInfo.id
+            modelId: arg.modelInfo.id,
+            overrides: arg.parameterOverrides
         }),
         safetySettings: uncensoredCatagory,
         systemInstruction: {
@@ -566,7 +567,7 @@ export async function requestGoogleCloudVertex(arg:RequestDataArgumentExtended):
         body.tools = undefined
     }
 
-    body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel))
+    body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel, arg.additionalParameters))
 
     if(arg.previewBody){
         return {
