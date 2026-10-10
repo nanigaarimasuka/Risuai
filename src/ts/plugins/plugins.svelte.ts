@@ -462,6 +462,8 @@ export const pluginV2 = {
     replacerbeforeRequest: new Set<ReplacerFunction>(),
     replacerafterRequest: new Set<(content: string, type: string) => string | Promise<string>>(),
     chatOutput: new Set<ChatOutputListener>(),
+    // Output listeners that asked for ids only, not copies of the character and chat.
+    chatOutputIdsOnly: new WeakSet<ChatOutputListener>(),
     unload: new Set<() => void | Promise<void>>(),
     loaded: false
 }
@@ -554,9 +556,15 @@ export const getV2PluginAPIs = () => {
                 throw (`replacer handler named ${name} not found`)
             }
         },
-        addRisuChatListener: (mode: string, func: ChatOutputListener) => {
+        addRisuChatListener: (mode: string, func: ChatOutputListener, options?: { snapshot?: boolean }) => {
             if (mode === 'output') {
                 pluginV2.chatOutput.add(func)
+                if (options?.snapshot === false) {
+                    pluginV2.chatOutputIdsOnly.add(func)
+                }
+                else {
+                    pluginV2.chatOutputIdsOnly.delete(func)
+                }
             }
             else {
                 throw (`chat listener mode ${mode} not found`)

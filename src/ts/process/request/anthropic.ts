@@ -357,7 +357,8 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
     }, arg.modelInfo.parameters, {
         'thinking_tokens': 'thinking.budget_tokens'
     }, arg.mode, {
-        modelId: arg.modelInfo.id
+        modelId: arg.modelInfo.id,
+        overrides: arg.parameterOverrides
     })
 
     // Handle thinking mode: off, adaptive, or budget
@@ -390,7 +391,7 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
     }
 
     const bedrock = arg.modelInfo.format === LLMFormat.AWSBedrockClaude
-    const additionalParams = getAdditionalParameters(aiModel)
+    const additionalParams = getAdditionalParameters(aiModel, arg.additionalParameters)
     const hasCustomAnthropicBeta = additionalParams.some(([key]) => {
         return key.startsWith('header::') && key.slice('header::'.length).toLocaleLowerCase() === 'anthropic-beta'
     })
