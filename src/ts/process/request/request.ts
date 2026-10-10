@@ -19,7 +19,7 @@ import { runTrigger } from "../triggers";
 import { requestClaude } from './anthropic';
 import { requestGoogleCloudVertex } from './google';
 import { requestOpenAI, requestOpenAILegacyInstruct, requestOpenAIResponseAPI } from "./openAI/requests";
-import { applyAdditionalParameters, applyParameters, getAdditionalParameters, type ModelModeExtended } from './shared';
+import { applyAdditionalParameters, applyParameters, getAdditionalParameters, type LLMParameterOverrides, type ModelModeExtended } from './shared';
 
 export type ToolCall = {
     name: string;
@@ -51,6 +51,10 @@ interface requestDataArgument{
     tools?: MCPTool[]
     rememberToolUsage?: boolean
     blockPlugins?:boolean
+    // A request's own generation settings, used instead of the user's settings.
+    parameterOverrides?: LLMParameterOverrides
+    // A request's own additional parameters, applied after the model's.
+    additionalParameters?: [string, string][]
 }
 
 export interface RequestDataArgumentExtended extends requestDataArgument{
@@ -626,7 +630,7 @@ async function requestNovelAI(arg:RequestDataArgumentExtended):Promise<requestDa
         "Authorization": "Bearer " + (arg.key ?? db.novelai.token)
     }
 
-    body = applyAdditionalParameters(body, headers, getAdditionalParameters(aiModel))
+    body = applyAdditionalParameters(body, headers, getAdditionalParameters(aiModel, arg.additionalParameters))
 
     const da = await globalFetch(aiModel === 'novelai_kayra' ? "https://text.novelai.net/ai/generate" : "https://api.novelai.net/ai/generate", {
         body: body,
@@ -694,7 +698,7 @@ async function requestOobaLegacy(arg:RequestDataArgumentExtended):Promise<reques
         'X-API-KEY': db.mancerHeader
     }
 
-    bodyTemplate = applyAdditionalParameters(bodyTemplate, headers, getAdditionalParameters(aiModel))
+    bodyTemplate = applyAdditionalParameters(bodyTemplate, headers, getAdditionalParameters(aiModel, arg.additionalParameters))
 
     if(arg.previewBody){
         return {
@@ -826,7 +830,7 @@ async function requestOoba(arg:RequestDataArgumentExtended):Promise<requestDataR
     }
 
     let headers: Record<string, string> = {}
-    bodyTemplate = applyAdditionalParameters(bodyTemplate, headers, getAdditionalParameters(aiModel))
+    bodyTemplate = applyAdditionalParameters(bodyTemplate, headers, getAdditionalParameters(aiModel, arg.additionalParameters))
 
     if(arg.previewBody){
         return {
@@ -886,9 +890,13 @@ async function requestPlugin(arg:RequestDataArgumentExtended):Promise<requestDat
             bias: [],
             max_tokens: maxTokens,
         }, [
-            'frequency_penalty','min_p','presence_penalty','repetition_penalty','top_k','top_p','temperature'
+            'frequency_penalty','min_p','presence_penalty','repetition_penalty','top_k','top_p','temperature',
+            // Reasoning settings reach a plugin provider only when the request sets them.
+            ...(arg.parameterOverrides?.reasoning_effort !== undefined ? ['reasoning_effort' as const] : []),
+            ...(arg.parameterOverrides?.thinking_tokens !== undefined ? ['thinking_tokens' as const] : []),
         ], {}, arg.mode, {
-            modelId: arg.aiModel
+            modelId: arg.aiModel,
+            overrides: arg.parameterOverrides
         }) as any, arg.abortSignal)) : await pluginProcess({
             bias: bias,
             prompt_chat: formated,
@@ -988,14 +996,15 @@ async function requestKobold(arg:RequestDataArgumentExtended):Promise<requestDat
     ], {
         'repetition_penalty': 'rep_pen'
     }, arg.mode, {
-        modelId: arg.aiModel
+        modelId: arg.aiModel,
+        overrides: arg.parameterOverrides
     }) as KoboldGenerationInputSchema
 
     let headers: Record<string, string> = {
         "content-type": "application/json",
     }
 
-    body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel)) as KoboldGenerationInputSchema
+    body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel, arg.additionalParameters)) as KoboldGenerationInputSchema
 
     if(arg.previewBody){
         return {
@@ -1073,7 +1082,7 @@ async function requestNovelList(arg:RequestDataArgumentExtended):Promise<request
         logit_bias_values: (logit_bias_values.length > 0) ? logit_bias_values.join("|") : undefined,
     };
 
-    send_body = applyAdditionalParameters(send_body, headers, getAdditionalParameters(arg.aiModel))
+    send_body = applyAdditionalParameters(send_body, headers, getAdditionalParameters(arg.aiModel, arg.additionalParameters))
 
     if(arg.previewBody){
         return {
@@ -1167,7 +1176,7 @@ async function requestOllama(arg:RequestDataArgumentExtended):Promise<requestDat
         think: ollamaThinkMode
     }
 
-    requestBody = applyAdditionalParameters(requestBody, customHeaders, getAdditionalParameters(arg.aiModel))
+    requestBody = applyAdditionalParameters(requestBody, customHeaders, getAdditionalParameters(arg.aiModel, arg.additionalParameters))
 
     if(arg.previewBody){
         return {
@@ -1292,7 +1301,8 @@ async function requestCohere(arg:RequestDataArgumentExtended):Promise<requestDat
         'top_k': 'k',
         'top_p': 'p',
     }, arg.mode, {
-        modelId: arg.aiModel
+        modelId: arg.aiModel,
+        overrides: arg.parameterOverrides
     })
 
     if(aiModel !== 'cohere-command-r-03-2024' && aiModel !== 'cohere-command-r-plus-04-2024'){
@@ -1313,7 +1323,7 @@ async function requestCohere(arg:RequestDataArgumentExtended):Promise<requestDat
         "Content-Type": "application/json"
     }
 
-    body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel))
+    body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel, arg.additionalParameters))
     console.log(body)
 
     if(arg.previewBody){
@@ -1409,7 +1419,7 @@ async function requestHorde(arg:RequestDataArgumentExtended):Promise<requestData
         "apikey": apiKey
     }
 
-    let finalBody = applyAdditionalParameters(argument, headers, getAdditionalParameters(arg.aiModel))
+    let finalBody = applyAdditionalParameters(argument, headers, getAdditionalParameters(arg.aiModel, arg.additionalParameters))
 
     const da = await fetch("https://stablehorde.net/api/v2/generate/text/async", {
         body: JSON.stringify(finalBody),
@@ -1493,7 +1503,7 @@ async function requestWebLLM(arg:RequestDataArgumentExtended):Promise<requestDat
         typical_p: db.ooba.typical_p,
     } as any
 
-    const finalParams = applyAdditionalParameters(transformersParams, {}, getAdditionalParameters(arg.aiModel))
+    const finalParams = applyAdditionalParameters(transformersParams, {}, getAdditionalParameters(arg.aiModel, arg.additionalParameters))
 
     const v = await runTransformers(prompt, realModel, finalParams)
     return {

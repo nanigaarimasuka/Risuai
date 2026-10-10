@@ -289,7 +289,8 @@ export async function requestOpenAI(arg:RequestDataArgumentExtended):Promise<req
                 safe_prompt: false,
                 max_tokens: arg.maxTokens,
             }, ['temperature', 'presence_penalty', 'frequency_penalty', 'top_p'], {}, arg.mode, {
-                modelId: arg.modelInfo.id
+                modelId: arg.modelInfo.id,
+                overrides: arg.parameterOverrides
             } ),
             headers: {
                 "Authorization": "Bearer " + (arg.key ?? db.mistralKey),
@@ -451,7 +452,8 @@ export async function requestOpenAI(arg:RequestDataArgumentExtended):Promise<req
         {},
         arg.mode,
         {
-            modelId: arg.modelInfo.id
+            modelId: arg.modelInfo.id,
+            overrides: arg.parameterOverrides
         }
     )
 
@@ -573,7 +575,7 @@ export async function requestOpenAI(arg:RequestDataArgumentExtended):Promise<req
         body.n = db.genTime
     }
     
-    body = applyAdditionalParameters(body, headers, getAdditionalParameters(aiModel))
+    body = applyAdditionalParameters(body, headers, getAdditionalParameters(aiModel, arg.additionalParameters))
 
     // Some aux flows are intentionally non-streaming (e.g. memory/translate).
     // If custom Additional Parameters contains stream=true, force non-stream mode back.
@@ -946,7 +948,7 @@ export async function requestOpenAILegacyInstruct(arg:RequestDataArgumentExtende
         "Authorization": "Bearer " + (arg.key ?? db.openAIKey)
     }
 
-    body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel))
+    body = applyAdditionalParameters(body, headers, getAdditionalParameters(arg.aiModel, arg.additionalParameters))
 
     const response = await globalFetch(arg.customURL ?? "https://api.openai.com/v1/completions", {
         body: body,

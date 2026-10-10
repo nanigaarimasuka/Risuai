@@ -1344,6 +1344,54 @@ interface RisuaiPluginAPI {
     getChatFromIndex(characterIndex: number, chatIndex: number): Promise<any|null>;
 
     /**
+     * Gets the ids that identify a chat, without copying its messages
+     * @param characterIndex - Character index
+     * @param chatIndex - Chat index
+     * @returns The chat id and its character's id, or null if not found
+     */
+    getChatIdentityFromIndex(characterIndex: number, chatIndex: number): Promise<{ chatId: string; characterId: string } | null>;
+
+    /**
+     * Gets what changed in a chat since a copy the plugin keeps, so a long chat
+     * is not copied whole on every read.
+     *
+     * Every message, and every object-valued key of the chat, has a version
+     * that changes whenever anything inside it changes. Pass the epoch, chat id
+     * and versions of the last result as `known`; the result copies only the
+     * messages whose versions are not among the known ones and the keys whose
+     * versions differ (keys holding plain values are always included). Without `known`, or after the page reloads (a new
+     * epoch) or for another chat id, everything is copied.
+     *
+     * Rebuild the chat by taking `keys` in order: `message` (when
+     * `messageArray`) is `messages[i]` or the kept message whose version is
+     * `messageVersions[i]`; any other key is `fields[key]` or the kept value.
+     * @param characterIndex - Character index
+     * @param chatIndex - Chat index
+     * @param known - The epoch, chat id and versions of the plugin's copy
+     * @returns The changes, or null if the chat is not found
+     */
+    getChatChangesFromIndex(
+        characterIndex: number,
+        chatIndex: number,
+        known?: { epoch?: string; chatId?: string; messages?: number[]; fields?: Record<string, number> }
+    ): Promise<{
+        epoch: string;
+        chatId: string;
+        keys: string[];
+        messageArray: boolean;
+        messageVersions: number[];
+        messages: Record<number, any>;
+        fieldVersions: Record<string, number>;
+        fields: Record<string, any>;
+    } | null>;
+
+    /**
+     * Gets every character's name and its chats' ids and names, in character
+     * index order, without any messages
+     */
+    getChatSummaries(): Promise<{ characterId: string; name: string; chats: { id: string; name: string }[] }[]>;
+
+    /**
      * Parses Risu CBS macros using the currently selected character and active chat.
      * Set processRegex to also run the editprocess script pipeline after CBS parsing.
      * The editprocess pipeline can invoke plugin script handlers and action scripts,
@@ -1923,7 +1971,13 @@ interface RisuaiPluginAPI {
      */
     addRisuChatListener(
         mode: 'output',
-        func: (arg: ChatOutputListenerArg) => void | Promise<void>
+        func: (arg: ChatOutputListenerArg) => void | Promise<void>,
+        /**
+         * snapshot: false gives `char` as `{ chaId }` and `chat` as `{ id }`
+         * instead of copies, which copying the whole character (every chat)
+         * would make slow; read the chat with getChatChangesFromIndex.
+         */
+        options?: { snapshot?: boolean }
     ): Promise<void>;
 
     /**
@@ -2114,14 +2168,47 @@ interface RisuaiPluginAPI {
      *   the user's plugin-supplied main or auxiliary model (e.g. a TTS
      *   preprocessor rewriting text with the configured otherAx model).
      *   Loop avoidance becomes the opting-in plugin's responsibility.
-     * @returns The model's response, which may be a string or a stream depending on the mode
+     * @param options.maxTokens - Optional maximum response (output) tokens for
+     *   this request instead of the user's maximum response setting.
+     * @param options.temperature - Optional temperature for this request, as
+     *   sent to the model (e.g. 0.7), instead of the user's setting.
+     * @param options.reasoningEffort - Optional reasoning effort for this
+     *   request on the settings' scale: -1 off, 0 low, 1 medium, 2 high,
+     *   3 extra high. Used by models that take a reasoning effort.
+     * @param options.thinkingTokens - Optional reasoning (thinking) token
+     *   budget for this request. Used by models that take one.
+     * @param options.additionalParameters - Optional additional parameters
+     *   for this request, in the format of the model's additional parameters
+     *   (`[key, value]`; `header::name` keys set headers, `json::` values are
+     *   parsed as JSON). Applied after the model's own.
+     * @param options.timeoutMs - Optional time limit in milliseconds; the
+     *   request is aborted when it is reached.
+     * Plugin providers receive `max_tokens` and `temperature`, and
+     * `reasoning_effort` and `thinking_tokens` when this request sets them;
+     * additional parameters do not apply to them.
+     * @returns The model's response (`{ type, result }`); a streamed response
+     *   is read to its end and returned as `{ type: 'success', result: text }`.
      */
     runLLMModel(options: {
         messages: any[];
         staticModel?: string;
         mode: string;
         allowPlugins?: boolean;
+        maxTokens?: number;
+        temperature?: number;
+        reasoningEffort?: number;
+        thinkingTokens?: number;
+        additionalParameters?: [string, string][];
+        timeoutMs?: number;
     }): Promise<any>;
+
+    /**
+     * Lists the models the model selector offers, including plugin-provided
+     * (`pluginmodel:::*`) and custom models. Only ids, display names and
+     * provider names are returned; endpoints, keys and other settings are not.
+     * An id can be passed to `runLLMModel` as `staticModel`.
+     */
+    getModelList(): Promise<{ id: string; name: string; provider: string }[]>;
 
     /**
      * Sends a chat message as if it were sent by the user, triggering the normal chat processing flow.

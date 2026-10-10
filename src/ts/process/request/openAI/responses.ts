@@ -347,7 +347,8 @@ async function buildResponsesBody(arg:RequestDataArgumentExtended):Promise<Recor
         reasoning_effort: 'reasoning.effort',
         verbosity: 'text.verbosity'
     }, arg.mode, {
-        modelId: arg.modelInfo.id
+        modelId: arg.modelInfo.id,
+        overrides: arg.parameterOverrides
     })
 
     if(body.tools.length === 0){
@@ -805,7 +806,7 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
     const headers = buildResponsesHeaders(arg, risuIdentify)
 
     if(aiModel === 'reverse_proxy' || aiModel?.startsWith('xcustom:::')){
-        body = applyAdditionalParameters(body, headers, getAdditionalParameters(aiModel))
+        body = applyAdditionalParameters(body, headers, getAdditionalParameters(aiModel, arg.additionalParameters))
     }
     if(!arg.useStreaming){
         body.stream = false
