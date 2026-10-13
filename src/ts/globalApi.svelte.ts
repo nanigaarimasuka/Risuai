@@ -39,6 +39,7 @@ import { updateGuisize } from "./gui/guisize";
 import { updateLorebooks } from "./characters";
 import { initMobileGesture } from "./hotkey";
 import { fetch as TauriHTTPFetch } from '@tauri-apps/plugin-http';
+import { fetchLogBodyText } from "./fetchLogBody";
 import { moduleUpdate } from "./process/modules";
 import type { AccountStorage } from "./storage/accountStorage";
 import { getColdStorageItem, makeColdData } from "./process/coldstorage.svelte";
@@ -64,6 +65,16 @@ interface fetchLog {
 }
 
 let fetchLog: fetchLog[] = []
+
+// The log lives in memory for as long as the page does, so it keeps only
+// the newest entries; plugins can send many requests per turn.
+const FETCH_LOG_LIMIT = 20
+
+function trimFetchLog() {
+    if (fetchLog.length > FETCH_LOG_LIMIT) {
+        fetchLog.length = FETCH_LOG_LIMIT
+    }
+}
 
 export async function downloadFile(name: string, dat: Uint8Array | ArrayBuffer | string) {
     if (typeof (dat) === 'string') {
@@ -678,6 +689,7 @@ export function addFetchLog(arg: {
         chatId: arg.chatId,
         status: arg.status
     });
+    trimFetchLog();
     return 0;
 }
 
@@ -783,9 +795,7 @@ function addFetchLogInGlobalFetch(response: any, success: boolean, url: string, 
         })
     }
 
-    if (fetchLog.length > 20) {
-        fetchLog.pop()
-    }
+    trimFetchLog()
 }
 
 /**
@@ -1506,20 +1516,43 @@ export class AppendableBuffer {
 
 /**
  * Pipes the fetch log to a readable stream.
- * @param {number} fetchLogIndex - The index of the fetch log.
+ * @param {fetchLog} logEntry - The request's own fetch log entry.
  * @param {ReadableStream<Uint8Array>} readableStream - The readable stream to pipe.
  * @returns {ReadableStream<Uint8Array>} - The new readable stream.
  */
-const pipeFetchLog = (fetchLogIndex: number, readableStream: ReadableStream<Uint8Array>) => {
-    
+const pipeFetchLog = (logEntry: fetchLog, readableStream: ReadableStream<Uint8Array>) => {
+
     const splited = readableStream.tee();
-    
+
     (async () => {
         const text = await (new Response(splited[0])).text()
-        fetchLog[fetchLogIndex].response = text
+        logEntry.response = text
     })()
-    
+
     return splited[1]
+}
+
+/**
+ * Records a response in the request's fetch log entry once its body has
+ * been read, and returns the response untouched.
+ */
+const logFetchResponse = (logEntry: fetchLog | null, response: Response) => {
+    if (!logEntry) {
+        return response
+    }
+    logEntry.status = response.status
+    logEntry.success = response.ok
+    if (response.body) {
+        response.clone().text().then((text) => {
+            logEntry.response = text
+        }).catch((error) => {
+            logEntry.response = `Response could not be read: ${error}`
+        })
+    }
+    else {
+        logEntry.response = ''
+    }
+    return response
 }
 
 async function fetchViaProxyJobWs(url: string, arg: {
@@ -1529,7 +1562,7 @@ async function fetchViaProxyJobWs(url: string, arg: {
     signal?: AbortSignal,
     requestTimeoutMs?: number,
     chatId?: string,
-    fetchLogIndex?: number | null
+    fetchLogEntry?: fetchLog | null
 }): Promise<Response> {
     const auth = await getNodeServerProxyAuth();
 
@@ -1592,7 +1625,7 @@ async function fetchViaProxyJobWs(url: string, arg: {
             }
         }
     });
-    const pipedReadable = arg.fetchLogIndex != null ? pipeFetchLog(arg.fetchLogIndex, readable) : readable;
+    const pipedReadable = arg.fetchLogEntry ? pipeFetchLog(arg.fetchLogEntry, readable) : readable;
 
     const ensureHeadersReady = () => {
         if (!headersReady) {
@@ -1788,10 +1821,10 @@ export async function fetchNative(url: string, arg: {
     const timeoutSignal = buildTimeoutSignal(arg.signal, arg.requestTimeoutMs)
     const requestSignal = timeoutSignal.signal
     const shouldLogFetch = arg.logFetch ?? true
-    let fetchLogIndex: number | null = null
+    let fetchLogEntry: fetchLog | null = null
     if (shouldLogFetch) {
-        fetchLogIndex = addFetchLog({
-            body: new TextDecoder().decode(realBody),
+        addFetchLog({
+            body: fetchLogBodyText(realBody, headers),
             headers: arg.headers,
             response: 'Streamed Fetch',
             success: true,
@@ -1799,15 +1832,16 @@ export async function fetchNative(url: string, arg: {
             resType: 'stream',
             chatId: arg.chatId,
         })
+        fetchLogEntry = fetchLog[0]
     }
     try {
         if (window.userScriptFetch && !throughProxy) {
-            return await window.userScriptFetch(url, {
+            return logFetchResponse(fetchLogEntry, await window.userScriptFetch(url, {
             body: realBody as any,
             headers: headers,
             method: arg.method,
             signal: requestSignal
-        })
+        }))
         }
         else if (isTauri) {
         fetchIndex++
@@ -1891,8 +1925,8 @@ export async function fetchNative(url: string, arg: {
         })
 
         let readableStream = tauriReadableStream
-        if (shouldLogFetch && fetchLogIndex !== null) {
-            readableStream = pipeFetchLog(fetchLogIndex, tauriReadableStream)
+        if (fetchLogEntry) {
+            readableStream = pipeFetchLog(fetchLogEntry, tauriReadableStream)
         }
 
         while (resHeaders === null && !resolved) {
@@ -1930,7 +1964,7 @@ export async function fetchNative(url: string, arg: {
                     signal: requestSignal,
                     requestTimeoutMs: arg.requestTimeoutMs,
                     chatId: arg.chatId,
-                    fetchLogIndex
+                    fetchLogEntry
                 });
             } catch (wsErr) {
                 console.warn('[ProxyJobWS] fallback to /proxy2 due to error:', wsErr);
@@ -1959,19 +1993,25 @@ export async function fetchNative(url: string, arg: {
             signal: requestSignal
         })
 
-        return new Response(r.body, {
+        return logFetchResponse(fetchLogEntry, new Response(r.body, {
             headers: r.headers,
             status: r.status
-        })
+        }))
     }
     else {
-        return await fetch(url, {
+        return logFetchResponse(fetchLogEntry, await fetch(url, {
             body: realBody as any,
             headers: headers,
             method: arg.method,
             signal: requestSignal,
-        })
+        }))
     }
+    } catch (error) {
+        if (fetchLogEntry) {
+            fetchLogEntry.success = false
+            fetchLogEntry.response = `${error}`
+        }
+        throw error
     } finally {
         timeoutSignal.cleanup()
     }
