@@ -1297,6 +1297,37 @@ const oauthData = {
     code_verifier: ''
 
 }
+// Copies one stored file to another, so a client backs up the database it
+// just wrote without uploading the same bytes again.
+app.post('/api/copy', authenticatedRouteLimiter, async (req, res, next) => {
+    if(!await checkAuth(req, res)){
+        return;
+    }
+    const filePath = req.headers['file-path'];
+    const targetPath = req.headers['target-file-path'];
+    if (!filePath || !targetPath) {
+        res.status(400).send({
+            error:'File path required'
+        });
+        return;
+    }
+    if(!isHex(filePath) || !isHex(targetPath) || filePath === '__password' || targetPath === '__password'){
+        res.status(400).send({
+            error:'Invaild Path'
+        });
+        return;
+    }
+
+    try {
+        await fs.copyFile(path.join(savePath, filePath), path.join(savePath, targetPath));
+        res.send({
+            success: true
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
 app.get('/api/oauth_login', async (req, res) => {
     const redirect_uri = (new URL (req.url)).host + '/api/oauth_callback'
 
