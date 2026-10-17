@@ -478,7 +478,12 @@ export async function saveDb() {
 
                 await forageStorage.setItem('database/database.bin', dbData)
                 if (!forageStorage.isAccount) {
-                    await forageStorage.setItem(`database/dbbackup-${(Date.now() / 100).toFixed()}.bin`, dbData)
+                    // The node server copies the file it just stored instead of
+                    // receiving the same database again.
+                    const backupKey = `database/dbbackup-${(Date.now() / 100).toFixed()}.bin`
+                    if (!await forageStorage.copyItem('database/database.bin', backupKey)) {
+                        await forageStorage.setItem(backupKey, dbData)
+                    }
                 }
                 if (forageStorage.isAccount) {
                     await sleep(3000)

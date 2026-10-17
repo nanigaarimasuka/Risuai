@@ -1,6 +1,7 @@
 import { language } from "src/lang"
 import { alertError, alertInput, waitAlert } from "../alert"
 import { base64url, getKeypairStore, saveKeypairStore } from "../util"
+import { gzipSaveBody, shouldGzipSaveBody } from "./gzipBody"
 
 const MAX_STORAGE_ERROR_DETAIL_LENGTH = 2000
 
@@ -154,13 +155,16 @@ export class NodeStorage{
     async setItem(key:string, value:Uint8Array) {
         await this.checkAuth()
         const context = getSetItemContext(key, value.byteLength)
+        const gzip = shouldGzipSaveBody(key, value)
+        const body = gzip ? await gzipSaveBody(value) : value
         let response:Response
         try {
             response = await fetch('/api/write', {
                 method: "POST",
-                body: value as any,
+                body: body as any,
                 headers: {
                     'content-type': 'application/octet-stream',
+                    ...(gzip ? { 'content-encoding': 'gzip' } : {}),
                     'file-path': Buffer.from(key, 'utf-8').toString('hex'),
                     'risu-auth': await this.createAuth()
                 }
@@ -187,6 +191,31 @@ export class NodeStorage{
         if(data.error){
             throw new Error(`Node storage setItem failed.\n${context}\nServer: ${formatUnknownError(data.error)}`)
         }
+    }
+    // Copies a stored file on the server, so a backup of the database is not
+    // uploaded a second time. False when the server has no copy route (an
+    // older server), so the caller can upload instead.
+    async copyItem(from:string, to:string):Promise<boolean> {
+        await this.checkAuth()
+        const da = await fetch('/api/copy', {
+            method: "POST",
+            headers: {
+                'file-path': Buffer.from(from, 'utf-8').toString('hex'),
+                'target-file-path': Buffer.from(to, 'utf-8').toString('hex'),
+                'risu-auth': await this.createAuth()
+            }
+        })
+        if(da.status === 404){
+            return false
+        }
+        if(da.status < 200 || da.status >= 300){
+            throw "copyItem Error"
+        }
+        const data = await da.json()
+        if(data.error){
+            throw data.error
+        }
+        return data.success === true
     }
     async getItem(key:string):Promise<Buffer> {
         await this.checkAuth()
