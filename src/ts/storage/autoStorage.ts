@@ -27,6 +27,15 @@ export class AutoStorage{
         return await this.realStorage.getItem(key)
 
     }
+    // Copies a stored file where the storage can do it without the data
+    // passing through here (the node server); false where it cannot.
+    async copyItem(from:string, to:string):Promise<boolean> {
+        await this.Init()
+        if(this.realStorage instanceof NodeStorage){
+            return await this.realStorage.copyItem(from, to)
+        }
+        return false
+    }
     async keys():Promise<string[]>{
         await this.Init()
         return await this.realStorage.keys()
