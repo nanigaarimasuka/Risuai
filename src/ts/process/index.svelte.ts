@@ -33,6 +33,7 @@ import { hypaMemoryV3 } from "./memory/hypav3";
 import { getModuleAssets, getModuleToggles } from "./modules";
 import { readImage } from "../globalApi.svelte";
 import { pluginV2 } from "../plugins/plugins.svelte";
+import { createUIYielder } from "./uiYield";
 
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'
@@ -905,8 +906,14 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }
     }
 
+    // Formatting and counting a long chat takes seconds; let the page paint
+    // and take input meanwhile. The counts are kept so trimming below does
+    // not count the dropped messages again.
+    const yieldToUI = createUIYielder()
+    const historyTokens = new WeakMap<OpenAIChat, { content: string, name: string, multimodals: MultiModal[], tokens: number }>()
     let index = 0
     for(const msg of ms){
+        await yieldToUI()
         let formatedChat = (await processScriptFull(nowChatroom,risuChatParser(msg.data, {chara: currentChar, role: msg.role}), 'editprocess', index, {
             chatRole: msg.role,
         })).data
@@ -1056,10 +1063,11 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             delete chat.multimodals
         }
         chats.push(chat)
-        currentTokens += await tokenizer.tokenizeChat(chat)
+        const chatTokens = await tokenizer.tokenizeChat(chat)
+        historyTokens.set(chat, { content: chat.content, name: chat.name, multimodals: chat.multimodals, tokens: chatTokens })
+        currentTokens += chatTokens
         index++
     }
-    console.log(JSON.stringify(chats, null, 2))
 
     const depthPrompts = lorepmt.actives.filter(v => {
         return (v.pos === 'depth' && v.depth > 0) || v.pos === 'reverse_depth'
@@ -1155,7 +1163,14 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 return false
             }
 
-            currentTokens -= await tokenizer.tokenizeChat(chats[0])
+            await yieldToUI()
+            const counted = historyTokens.get(chats[0])
+            currentTokens -= counted
+                && counted.content === chats[0].content
+                && counted.name === chats[0].name
+                && counted.multimodals === chats[0].multimodals
+                ? counted.tokens
+                : await tokenizer.tokenizeChat(chats[0])
             chats.splice(0, 1)
         }
         currentChat.lastMemory = chats[0].memo
