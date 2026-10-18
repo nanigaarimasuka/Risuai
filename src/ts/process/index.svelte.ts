@@ -30,9 +30,11 @@ import { hypaMemoryV2 } from "./memory/hypav2";
 import { runLuaEditTrigger } from "./scriptings";
 import { getModelInfo, LLMFlags } from "../model/modellist";
 import { hypaMemoryV3 } from "./memory/hypav3";
-import { getModuleAssets, getModuleToggles } from "./modules";
+import { getModuleAssets, getModuleRegexScripts, getModuleToggles } from "./modules";
 import { readImage } from "../globalApi.svelte";
 import { pluginV2 } from "../plugins/plugins.svelte";
+import { createUIYielder } from "./uiYield";
+import { canFormatRecentHistoryOnly, selectRecentHistory } from "./recentHistory";
 
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'
@@ -905,8 +907,34 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }
     }
 
-    let index = 0
-    for(const msg of ms){
+    // Formatting and counting a long chat takes seconds; let the page paint
+    // and take input meanwhile. The counts are kept so trimming below does
+    // not count the dropped messages again.
+    const yieldToUI = createUIYielder()
+    const historyTokens = new WeakMap<OpenAIChat, { content: string, name: string, multimodals: MultiModal[], tokens: number }>()
+    const countHistoryChat = async (chat:OpenAIChat) => {
+        const chatTokens = await tokenizer.tokenizeChat(chat)
+        historyTokens.set(chat, { content: chat.content, name: chat.name, multimodals: chat.multimodals, tokens: chatTokens })
+        return chatTokens
+    }
+
+    // Depth prompts do not depend on the history; their count is needed
+    // before it to know where the history is cut.
+    const depthPrompts = lorepmt.actives.filter(v => {
+        return (v.pos === 'depth' && v.depth > 0) || v.pos === 'reverse_depth'
+    })
+    let depthTokens = 0
+    for(const depthPrompt of depthPrompts){
+        const chat:OpenAIChat = {
+            role: depthPrompt.role,
+            content: risuChatParser(resolvePosition(depthPrompt.prompt), {chara: currentChar})
+        }
+        depthTokens += await tokenizer.tokenizeChat(chat)
+    }
+
+    const summaryMemory = !!nowChatroom.supaMemory && (DBState.db.supaModelType !== 'none' || DBState.db.hanuraiEnable || DBState.db.hypav2 || DBState.db.hypaV3)
+
+    const formatHistoryMessage = async (msg:Message, index:number):Promise<OpenAIChat> => {
         let formatedChat = (await processScriptFull(nowChatroom,risuChatParser(msg.data, {chara: currentChar, role: msg.role}), 'editprocess', index, {
             chatRole: msg.role,
         })).data
@@ -1055,25 +1083,59 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         if(chat.multimodals.length === 0){
             delete chat.multimodals
         }
-        chats.push(chat)
-        currentTokens += await tokenizer.tokenizeChat(chat)
-        index++
+        return chat
     }
-    console.log(JSON.stringify(chats, null, 2))
 
-    const depthPrompts = lorepmt.actives.filter(v => {
-        return (v.pos === 'depth' && v.depth > 0) || v.pos === 'reverse_depth'
-    })
-
-    for(const depthPrompt of depthPrompts){
-        const chat:OpenAIChat = {
-            role: depthPrompt.role,
-            content: risuChatParser(resolvePosition(depthPrompt.prompt), {chara: currentChar})
+    if(canFormatRecentHistoryOnly({
+        summaryMemory,
+        editprocessHandlers: pluginV2.editprocess.size,
+        scripts: (DBState.db.presetRegex ?? []).concat(nowChatroom.customscript ?? []).concat(getModuleRegexScripts()),
+    })){
+        // Only the newest messages that fit are formatted. Trimming below
+        // drops the chats before the history first, then the oldest
+        // messages, so a message is kept exactly when it fits together with
+        // every newer one once all of those chats are gone, and when one is
+        // left out none of those chats remain.
+        for(const msg of ms){
+            if(!msg.chatId){
+                msg.chatId = v4()
+            }
         }
-        currentTokens += await tokenizer.tokenizeChat(chat)
+        let leadingTokens = 0
+        for(const chat of chats){
+            leadingTokens += await tokenizer.tokenizeChat(chat)
+        }
+        const recent = await selectRecentHistory({
+            count: ms.length,
+            fixedTokens: currentTokens + depthTokens,
+            leadingTokens,
+            maxTokens: maxContextTokens,
+            format: async (index) => {
+                await yieldToUI()
+                const chat = await formatHistoryMessage(ms[index], index)
+                return { chat, tokens: await countHistoryChat(chat) }
+            },
+        })
+        if(!recent.complete){
+            chats = []
+            currentTokens -= leadingTokens
+        }
+        chats.push(...recent.chats)
+        currentTokens += recent.tokens
     }
+    else{
+        let index = 0
+        for(const msg of ms){
+            await yieldToUI()
+            const chat = await formatHistoryMessage(msg, index)
+            chats.push(chat)
+            currentTokens += await countHistoryChat(chat)
+            index++
+        }
+    }
+    currentTokens += depthTokens
     
-    if(nowChatroom.supaMemory && (DBState.db.supaModelType !== 'none' || DBState.db.hanuraiEnable || DBState.db.hypav2 || DBState.db.hypaV3)){
+    if(summaryMemory){
         stageTimings.stage1Duration = Date.now() - stageTimings.stage1Start
         chatProcessStage.set(2)
         stageTimings.stage2Start = Date.now()
@@ -1155,7 +1217,14 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 return false
             }
 
-            currentTokens -= await tokenizer.tokenizeChat(chats[0])
+            await yieldToUI()
+            const counted = historyTokens.get(chats[0])
+            currentTokens -= counted
+                && counted.content === chats[0].content
+                && counted.name === chats[0].name
+                && counted.multimodals === chats[0].multimodals
+                ? counted.tokens
+                : await tokenizer.tokenizeChat(chats[0])
             chats.splice(0, 1)
         }
         currentChat.lastMemory = chats[0].memo
