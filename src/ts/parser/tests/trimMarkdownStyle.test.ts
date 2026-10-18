@@ -62,6 +62,13 @@ const expectScopedStyles = (body: HTMLElement, count: number) => {
     }
 }
 
+describe('markdown punctuation', () => {
+    it('shows repeated punctuation, ellipses and dashes as written', async () => {
+        const out = await ParseMarkdown('뭐???????? 정말!!!!! 그래,, 음... --- (c)', null, 'back')
+        expect(out).toContain('뭐???????? 정말!!!!! 그래,, 음... --- (c)')
+    })
+})
+
 describe('trimMarkdown style handling', () => {
     it('decodes <style> into a scoped style tag', async () => {
         const out = await ParseMarkdown('<style>.mybox { color: red; }</style><div class="mybox">hello</div>', null, 'back')
