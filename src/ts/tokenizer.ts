@@ -11,7 +11,10 @@ import { pluginV2 } from "./plugins/plugins.svelte";
 import type { GemmaTokenizer } from "@huggingface/transformers";
 import { LRUMap } from 'mnemonist';
 
-const MAX_CACHE_SIZE = 1500;
+// Every request counts each message of the chat, so the cache must hold a
+// long chat's messages; when it holds fewer, counting from the oldest message
+// evicts each entry before it is used again and nothing is reused.
+const MAX_CACHE_SIZE = 20000;
 
 const encodeCache = new LRUMap<string, number[] | Uint32Array | Int32Array>(MAX_CACHE_SIZE);
 
