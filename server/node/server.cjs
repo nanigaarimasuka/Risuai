@@ -1531,6 +1531,9 @@ async function startServer() {
     try {
       
         const port = process.env.PORT || 6001;
+        // Listen on loopback only: the server is reached through a reverse
+        // proxy. Set HOST (e.g. 0.0.0.0) to open it to other machines.
+        const host = process.env.HOST || '127.0.0.1';
         const httpsOptions = await getHttpsOptions();
         let server = null;
 
@@ -1538,7 +1541,7 @@ async function startServer() {
             // HTTPS
             server = https.createServer(httpsOptions, app);
             setupProxyStreamWebSocket(server);
-            server.listen(port, () => {
+            server.listen(port, host, () => {
                 console.log("[Server] HTTPS server is running.");
                 console.log(`[Server] https://localhost:${port}/`);
             });
@@ -1546,7 +1549,7 @@ async function startServer() {
             // HTTP
             server = http.createServer(app);
             setupProxyStreamWebSocket(server);
-            server.listen(port, () => {
+            server.listen(port, host, () => {
                 console.log("[Server] HTTP server is running.");
                 console.log(`[Server] http://localhost:${port}/`);
             });
