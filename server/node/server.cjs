@@ -1236,6 +1236,9 @@ app.get('/api/remove', authenticatedRouteLimiter, async (req, res, next) => {
     }
     const filePaths = req.headers['file-path']?.split('$$') || []
 
+    // Check every path first and answer once, after all are removed.
+    const normalizedSavePath = path.resolve(savePath);
+    const storageFilePaths = [];
     for(const filePath of filePaths){
         if (!filePath) {
             res.status(400).send({
@@ -1243,23 +1246,28 @@ app.get('/api/remove', authenticatedRouteLimiter, async (req, res, next) => {
             });
             return;
         }
-        if(!isHex(filePath)){
+        const storageFilePath = path.resolve(normalizedSavePath, filePath.trim());
+        if(!isHex(filePath.trim()) || !storageFilePath.startsWith(`${normalizedSavePath}${path.sep}`)){
             res.status(400).send({
                 error:'Invaild Path'
             });
             return;
         }
-
-        try {
-            await fs.rm(path.join(savePath, filePath));
-            res.send({
-                success: true,
-            });
-        } catch (error) {
-            next(error);
-        }
+        storageFilePaths.push(storageFilePath);
     }
-    
+
+    try {
+        for(const storageFilePath of storageFilePaths){
+            // A file already gone counts as removed: cold storage cleanup and
+            // the plugin storage can both remove the same item.
+            await fs.rm(storageFilePath, { force: true });
+        }
+        res.send({
+            success: true,
+        });
+    } catch (error) {
+        next(error);
+    }
 });
 
 app.get('/api/list', authenticatedRouteLimiter, async (req, res, next) => {

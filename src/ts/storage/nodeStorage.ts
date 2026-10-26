@@ -3,6 +3,8 @@ import { alertError, alertInput, waitAlert } from "../alert"
 import { base64url, getKeypairStore, saveKeypairStore } from "../util"
 import { gzipSaveBody, shouldGzipSaveBody } from "./gzipBody"
 
+const REMOVE_BATCH_KEYS = 32
+
 const MAX_STORAGE_ERROR_DETAIL_LENGTH = 2000
 
 function formatStorageValueSize(byteLength:number) {
@@ -255,19 +257,25 @@ export class NodeStorage{
     }
     async removeItem(key:string|string[]){
         await this.checkAuth()
-        const da = await fetch('/api/remove', {
-            method: "GET",
-            headers: {
-                'file-path': Buffer.from(Array.isArray(key) ? key.join('$$') : key, 'utf-8').toString('hex'),
-                'risu-auth': await this.createAuth()
+        // Each key is hex-encoded on its own and the keys are joined with $$,
+        // which hex never contains, so the server can split them. Keys go in
+        // batches to keep the header small.
+        const keys = Array.isArray(key) ? key : [key]
+        for (let i = 0; i < keys.length; i += REMOVE_BATCH_KEYS) {
+            const da = await fetch('/api/remove', {
+                method: "GET",
+                headers: {
+                    'file-path': keys.slice(i, i + REMOVE_BATCH_KEYS).map((k) => Buffer.from(k, 'utf-8').toString('hex')).join('$$'),
+                    'risu-auth': await this.createAuth()
+                }
+            })
+            if(da.status < 200 || da.status >= 300){
+                throw "removeItem Error"
             }
-        })
-        if(da.status < 200 || da.status >= 300){
-            throw "removeItem Error"
-        }
-        const data = await da.json()
-        if(data.error){
-            throw data.error
+            const data = await da.json()
+            if(data.error){
+                throw data.error
+            }
         }
     }
 
