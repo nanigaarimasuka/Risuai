@@ -362,7 +362,9 @@ export async function saveDb() {
 
         $effect(() => {
             DBState.db.botPresetsId
-            DBState.db.botPresets.length
+            // The whole list, as for modules and plugins: a preset whose prompt
+            // or name changes is saved too, not only an added or removed one.
+            $state.snapshot(DBState.db.botPresets)
             changeTracker.botPreset = true
             saveTimeoutExecute()
         })
